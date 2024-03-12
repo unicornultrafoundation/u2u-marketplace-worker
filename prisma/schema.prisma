@@ -259,9 +259,11 @@ model MarketplaceStatus {
 }
 
 model SyncMasterData{
-  timestamp      Int                     @default(0)
-  type           CONTRACT_TYPE           @id
+  timestamp      Int                      @default(0)
+  type           CONTRACT_TYPE            @id
+  syncDataStatus Boolean                  @default(true)
 }
+
 
 
 

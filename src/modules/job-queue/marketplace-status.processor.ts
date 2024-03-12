@@ -26,6 +26,17 @@ export class MarketplaceStatusProcessor implements OnModuleInit {
   }
 
   @Cron(CronExpression.EVERY_10_SECONDS)
+  async callEach10SecondSyncMarketplaceStatus() {
+    try {
+      logger.info(`call per 10 seconds`); // Run the task once immediately upon service start
+      await this.handleSyncMarketPlaceStatus();
+    } catch (error) {
+      logger.error(
+        `Sync data marketplace Fail 10 seconds: ${JSON.stringify(error)}`,
+      );
+    }
+  }
+
   async handleSyncMarketPlaceStatus() {
     try {
       await Promise.all([
@@ -45,6 +56,14 @@ export class MarketplaceStatusProcessor implements OnModuleInit {
       const first = 1000;
       let hasMore = true;
       let lastProcessedTimestamp = 0;
+      // Nếu syncDataStatus là true, tức là quá trình sync đang chạy, không thực hiện gì cả
+      if (lastItem && lastItem.syncDataStatus === true) {
+        logger.info('Sync data marketplace status 721s is already running');
+        return;
+      }
+
+      // Đặt syncDataStatus là true để chỉ ra rằng quá trình sync đang chạy
+      await this.updateSyncStatus(CONTRACT_TYPE.ERC721, true, 0);
 
       while (hasMore) {
         const variables = {
@@ -55,7 +74,6 @@ export class MarketplaceStatusProcessor implements OnModuleInit {
         };
 
         const response = await this.sdk.GetMarketplaceStatus721(variables);
-
         if (
           response &&
           response.marketEvent721S &&
@@ -73,20 +91,14 @@ export class MarketplaceStatusProcessor implements OnModuleInit {
       }
 
       if (lastProcessedTimestamp > 0) {
-        await this.prisma.syncMasterData.upsert({
-          where: {
-            type: CONTRACT_TYPE.ERC721,
-          },
-          update: {
-            timestamp: lastProcessedTimestamp,
-          },
-          create: {
-            timestamp: lastProcessedTimestamp,
-            type: CONTRACT_TYPE.ERC721,
-          },
-        });
+        await this.updateSyncStatus(
+          CONTRACT_TYPE.ERC721,
+          false,
+          lastProcessedTimestamp,
+        );
+      } else {
+        await this.updateSyncStatus(CONTRACT_TYPE.ERC721, false);
       }
-
       logger.info('Sync data marketplace status 721s successful');
     } catch (error) {
       console.error(error);
@@ -104,6 +116,14 @@ export class MarketplaceStatusProcessor implements OnModuleInit {
       const first = 1000;
       let hasMore = true;
       let lastProcessedTimestamp = 0;
+      // Nếu syncDataStatus là true, tức là quá trình sync đang chạy, không thực hiện gì cả
+      if (lastItem && lastItem.syncDataStatus === true) {
+        logger.info('Sync data marketplace status 1155s is already running');
+        return;
+      }
+
+      // Đặt syncDataStatus là true để chỉ ra rằng quá trình sync đang chạy
+      await this.updateSyncStatus(CONTRACT_TYPE.ERC1155, true);
       while (hasMore) {
         const variables = {
           first,
@@ -128,18 +148,13 @@ export class MarketplaceStatusProcessor implements OnModuleInit {
         }
       }
       if (lastProcessedTimestamp > 0) {
-        await this.prisma.syncMasterData.upsert({
-          where: {
-            type: CONTRACT_TYPE.ERC1155,
-          },
-          update: {
-            timestamp: lastProcessedTimestamp,
-          },
-          create: {
-            timestamp: lastProcessedTimestamp,
-            type: CONTRACT_TYPE.ERC1155,
-          },
-        });
+        await this.updateSyncStatus(
+          CONTRACT_TYPE.ERC1155,
+          false,
+          lastProcessedTimestamp,
+        );
+      } else {
+        await this.updateSyncStatus(CONTRACT_TYPE.ERC1155, false);
       }
 
       logger.info('Sync data marketplace status 1155s successful');
@@ -149,39 +164,53 @@ export class MarketplaceStatusProcessor implements OnModuleInit {
   }
 
   async processMarketEvents721(events) {
-    const eventPromises = events.map(async (item) => {
-      const nft = await this.getNFT(item.nftId.tokenId, item?.address);
-      if (nft) {
-        const timestamp = parseInt(item.timestamp);
-        if (item.event === SELL_STATUS.AskNew) {
-          await this.createMarketplaceStatus721(nft, item, timestamp);
-        } else if (
-          item.event === SELL_STATUS.AskCancel ||
-          item.event === SELL_STATUS.Trade
-        ) {
-          await this.deleteMarketplaceStatus(nft, item, CONTRACT_TYPE.ERC721);
+    Promise.all(
+      events.map(async (item) => {
+        if (item.nftId) {
+          const nft = await this.getNFT(item.nftId.tokenId, item?.address);
+          if (nft) {
+            const timestamp = parseInt(item.timestamp);
+            if (item.event === SELL_STATUS.AskNew) {
+              await this.createMarketplaceStatus721(nft, item, timestamp);
+            } else if (
+              item.event === SELL_STATUS.AskCancel ||
+              item.event === SELL_STATUS.Trade
+            ) {
+              await this.deleteMarketplaceStatus(
+                nft,
+                item,
+                CONTRACT_TYPE.ERC721,
+              );
+            }
+          }
         }
-      }
-    });
-    await Promise.all(eventPromises);
+      }),
+    );
   }
 
   async processMarketEvents1155(events) {
-    const eventPromises = events.map(async (item) => {
-      const nft = await this.getNFT(item.nftId.tokenId, item?.address);
-      if (nft) {
-        const timestamp = parseInt(item.timestamp);
-        if (item.event === SELL_STATUS.AskNew) {
-          await this.createMarketplaceStatus1155(nft, item, timestamp);
-        } else if (
-          item.event === SELL_STATUS.AskCancel ||
-          item.event === SELL_STATUS.Trade
-        ) {
-          await this.deleteMarketplaceStatus(nft, item, CONTRACT_TYPE.ERC1155);
+    await Promise.all(
+      events.map(async (item) => {
+        if (item.nftId) {
+          const nft = await this.getNFT(item.nftId.tokenId, item?.address);
+          if (nft) {
+            const timestamp = parseInt(item.timestamp);
+            if (item.event === SELL_STATUS.AskNew) {
+              await this.createMarketplaceStatus1155(nft, item, timestamp);
+            } else if (
+              item.event === SELL_STATUS.AskCancel ||
+              item.event === SELL_STATUS.Trade
+            ) {
+              await this.deleteMarketplaceStatus(
+                nft,
+                item,
+                CONTRACT_TYPE.ERC1155,
+              );
+            }
+          }
         }
-      }
-    });
-    await Promise.all(eventPromises);
+      }),
+    );
   }
 
   async createMarketplaceStatus721(nft, item, timestamp) {
@@ -276,14 +305,24 @@ export class MarketplaceStatusProcessor implements OnModuleInit {
       },
     });
 
-    return await this.prisma.nFT.findFirst({
-      where: {
-        OR: [
-          { AND: [{ id: tokenId }, { collectionId: collection.id }] },
-          { AND: [{ u2uId: tokenId }, { collectionId: collection.id }] },
-        ],
-      },
-    });
+    if (collection) {
+      if (!collection?.isU2U) {
+        return await this.prisma.nFT.findUnique({
+          where: {
+            id_collectionId: {
+              id: tokenId,
+              collectionId: collection.id,
+            },
+          },
+        });
+      } else {
+        return await this.prisma.nFT.findFirst({
+          where: {
+            AND: [{ u2uId: tokenId }, { collectionId: collection.id }],
+          },
+        });
+      }
+    }
   }
 
   async deleteMarketplaceStatus(nft, item, type: CONTRACT_TYPE) {
@@ -325,5 +364,31 @@ export class MarketplaceStatusProcessor implements OnModuleInit {
   }
   weiToEther(wei) {
     return wei / 1000000000000000000; // 1 Ether = 10^18 Wei
+  }
+  async updateSyncStatus(
+    contractType: CONTRACT_TYPE,
+    syncDataStatus: boolean,
+    timestamp = null,
+  ) {
+    const dataUpdate: Prisma.SyncMasterDataCreateInput = {
+      type: contractType,
+      syncDataStatus: syncDataStatus,
+    };
+    const dataCreate: Prisma.SyncMasterDataCreateInput = {
+      type: contractType,
+      syncDataStatus: syncDataStatus,
+    };
+    if (timestamp !== null && timestamp > 0) {
+      dataUpdate.timestamp = timestamp;
+    }
+    if (timestamp === 0) {
+      dataCreate.timestamp = 0;
+    }
+
+    await this.prisma.syncMasterData.upsert({
+      where: { type: contractType },
+      update: dataUpdate,
+      create: dataCreate,
+    });
   }
 }
